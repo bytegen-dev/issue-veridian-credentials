@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Shield, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Shield, Loader2, CheckCircle, XCircle, Upload } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
 // Example credential templates
@@ -51,7 +51,10 @@ const EXAMPLE_CREDENTIALS = [
 ];
 
 export default function CredentialIssuer() {
-  const [identifier, setIdentifier] = useState("");
+  // Load default identifier from environment variable
+  const defaultIdentifier = process.env.NEXT_PUBLIC_DEFAULT_IDENTIFIER_ID || "";
+
+  const [identifier, setIdentifier] = useState(defaultIdentifier);
   const [credentialType, setCredentialType] = useState("");
   const [attributes, setAttributes] = useState("{}");
   const [isIssuing, setIsIssuing] = useState(false);
@@ -67,6 +70,102 @@ export default function CredentialIssuer() {
       setCredentialType(example.schemaSaid);
       setAttributes(JSON.stringify(example.attributes, null, 2));
     }
+  };
+
+  const handleSchemaImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const schema = JSON.parse(content);
+
+        // Validate it's a schema object
+        if (!schema || typeof schema !== "object") {
+          setResult({
+            success: false,
+            message: "Invalid schema file: Not a valid JSON object",
+          });
+          return;
+        }
+
+        // Extract schema SAID from $id field
+        const schemaSaid = schema.$id;
+        if (!schemaSaid || typeof schemaSaid !== "string") {
+          setResult({
+            success: false,
+            message:
+              "Invalid schema file: Missing or invalid $id field (Schema SAID)",
+          });
+          return;
+        }
+
+        // Extract attribute examples from schema properties if available
+        let attributeExamples: any = {};
+        if (schema.properties?.a?.oneOf?.[1]?.properties) {
+          const attributeProperties = schema.properties.a.oneOf[1].properties;
+          // Extract custom attributes (skip metadata fields like d, i, dt)
+          Object.keys(attributeProperties).forEach((key) => {
+            if (!["d", "i", "dt"].includes(key)) {
+              const prop = attributeProperties[key];
+              // Set example values based on type
+              if (prop.type === "string") {
+                attributeExamples[key] = `example_${key}`;
+              } else if (prop.type === "number") {
+                attributeExamples[key] = 0;
+              } else if (prop.type === "boolean") {
+                attributeExamples[key] = false;
+              } else {
+                attributeExamples[key] = null;
+              }
+            }
+          });
+        }
+
+        // Pre-fill the credential type with the schema SAID
+        setCredentialType(schemaSaid);
+
+        // Pre-fill attributes if we found any
+        if (Object.keys(attributeExamples).length > 0) {
+          setAttributes(JSON.stringify(attributeExamples, null, 2));
+        }
+
+        // Show success message
+        setResult({
+          success: true,
+          message: `Schema imported successfully! Schema SAID: ${schemaSaid}`,
+          data: {
+            schemaSaid: schemaSaid,
+            title: schema.title || "Unknown",
+            credentialType: schema.credentialType || "Unknown",
+            version: schema.version || "Unknown",
+            attributesFound: Object.keys(attributeExamples).length,
+          },
+        });
+      } catch (error: any) {
+        console.error("Failed to import schema:", error);
+        setResult({
+          success: false,
+          message: `Failed to import schema: ${
+            error.message || "Invalid JSON file"
+          }`,
+        });
+      }
+    };
+
+    reader.onerror = () => {
+      setResult({
+        success: false,
+        message: "Failed to read the schema file",
+      });
+    };
+
+    reader.readAsText(file);
+
+    // Reset file input so the same file can be selected again
+    event.target.value = "";
   };
 
   const handleIssue = async () => {
@@ -174,6 +273,36 @@ export default function CredentialIssuer() {
             </Select>
             <p className="text-xs text-muted-foreground">
               Select an example to pre-fill the credential type and attributes
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="import-schema">Import Schema JSON</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="import-schema"
+                type="file"
+                accept=".json,application/json"
+                onChange={handleSchemaImport}
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  document.getElementById("import-schema")?.click()
+                }
+                className="w-full"
+                type="button"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Import Schema File
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Import a schema JSON file generated by the Schema Builder. The
+              schema SAID will be automatically extracted and pre-filled, along
+              with attribute examples if available.
             </p>
           </div>
 
