@@ -30,7 +30,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 Create a `.env.local` file:
 
 ```env
-NEXT_PUBLIC_CREDENTIAL_SERVER_URL=https://cred-issuance.dev.idw-sandboxes.cf-deployments.org
+NEXT_PUBLIC_CREDENTIAL_SERVER_URL=xxxx
 ```
 
 ## Usage
