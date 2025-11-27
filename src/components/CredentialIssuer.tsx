@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,57 +15,132 @@ import {
 import { Shield, Loader2, CheckCircle, XCircle, Upload } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
-// Example credential templates
-const EXAMPLE_CREDENTIALS = [
-  {
-    name: "Rare EVO 2024 Attendee",
-    schemaSaid: "EJxnJdxkHbRw2wVFNe4IUOPLt8fEtg9Sr3WyTjlgKoIb",
-    attributes: {
-      attendeeName: "John Doe",
-    },
-  },
-  {
-    name: "Foundation Employee",
-    schemaSaid: "EL9oOWU_7zQn_rD--Xsgi3giCWnFDaNvFMUGTOZx1ARO",
-    attributes: {
-      email: "john.doe@example.com",
-      firstName: "John",
-      lastName: "Doe",
-    },
-  },
-  {
-    name: "Qualified vLEI Issuer Credential",
-    schemaSaid: "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
-    attributes: {
-      LEI: "5493000X9UK29YM9OD70",
-      gracePeriod: 90,
-    },
-  },
-  {
-    name: "Legal Entity vLEI",
-    schemaSaid: "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
-    attributes: {
-      LEI: "5493000X9UK29YM9OD70",
-    },
-  },
-];
+interface CredentialExample {
+  name: string;
+  schemaSaid: string;
+  attributes: Record<string, any>;
+}
 
 export default function CredentialIssuer() {
   // Load default identifier from environment variable
   const defaultIdentifier = process.env.NEXT_PUBLIC_DEFAULT_IDENTIFIER_ID || "";
 
+  const credentialServerUrl =
+    process.env.NEXT_PUBLIC_CREDENTIAL_SERVER_URL ||
+    "http://localhost:3001";
+
   const [identifier, setIdentifier] = useState(defaultIdentifier);
   const [credentialType, setCredentialType] = useState("");
   const [attributes, setAttributes] = useState("{}");
   const [isIssuing, setIsIssuing] = useState(false);
+  const [exampleCredentials, setExampleCredentials] = useState<
+    CredentialExample[]
+  >([]);
+  const [isLoadingExamples, setIsLoadingExamples] = useState(true);
   const [result, setResult] = useState<{
     success: boolean;
     message: string;
     data?: any;
   } | null>(null);
 
+  // Fetch schemas and generate examples from credential server
+  useEffect(() => {
+    const fetchExamples = async () => {
+      try {
+        setIsLoadingExamples(true);
+
+        // Fetch list of available schemas
+        const schemasResponse = await fetch(`${credentialServerUrl}/schemas`);
+        if (!schemasResponse.ok) {
+          throw new Error("Failed to fetch schemas");
+        }
+
+        const schemasData = await schemasResponse.json();
+        const schemas = schemasData.data || [];
+
+        // Fetch each schema and extract example attributes
+        const examples: CredentialExample[] = await Promise.all(
+          schemas.map(async (schema: { id: string; name: string }) => {
+            try {
+              // Fetch the actual schema JSON from /oobi endpoint
+              const schemaResponse = await fetch(
+                `${credentialServerUrl}/oobi/${schema.id}`
+              );
+              if (!schemaResponse.ok) {
+                console.warn(
+                  `Failed to fetch schema ${schema.id}, skipping...`
+                );
+                return null;
+              }
+
+              const schemaJson = await schemaResponse.json();
+
+              // Extract example attributes from schema properties
+              let attributeExamples: Record<string, any> = {};
+              if (
+                schemaJson.properties?.a?.oneOf?.[1]?.properties
+              ) {
+                const attributeProperties =
+                  schemaJson.properties.a.oneOf[1].properties;
+
+                // Extract custom attributes (skip metadata fields like d, i, dt)
+                Object.keys(attributeProperties).forEach((key) => {
+                  if (!["d", "i", "dt"].includes(key)) {
+                    const prop = attributeProperties[key];
+                    // Set example values based on type
+                    if (prop.type === "string") {
+                      // Use format hints or default to example value
+                      if (prop.format === "date-time") {
+                        attributeExamples[key] = new Date().toISOString();
+                      } else if (prop.format === "ISO 17442") {
+                        attributeExamples[key] = "5493000X9UK29YM9OD70";
+                      } else {
+                        attributeExamples[key] = `example_${key}`;
+                      }
+                    } else if (prop.type === "number") {
+                      attributeExamples[key] = 0;
+                    } else if (prop.type === "boolean") {
+                      attributeExamples[key] = false;
+                    } else {
+                      attributeExamples[key] = null;
+                    }
+                  }
+                });
+              }
+
+              return {
+                name: schema.name,
+                schemaSaid: schema.id,
+                attributes: attributeExamples,
+              };
+            } catch (error) {
+              console.error(
+                `Error processing schema ${schema.id}:`,
+                error
+              );
+              return null;
+            }
+          })
+        );
+
+        // Filter out null values and set examples
+        setExampleCredentials(
+          examples.filter((ex): ex is CredentialExample => ex !== null)
+        );
+      } catch (error) {
+        console.error("Failed to load examples from credential server:", error);
+        // Fallback to empty array if fetch fails
+        setExampleCredentials([]);
+      } finally {
+        setIsLoadingExamples(false);
+      }
+    };
+
+    fetchExamples();
+  }, [credentialServerUrl]);
+
   const loadExample = (exampleName: string) => {
-    const example = EXAMPLE_CREDENTIALS.find((ex) => ex.name === exampleName);
+    const example = exampleCredentials.find((ex) => ex.name === exampleName);
     if (example) {
       setCredentialType(example.schemaSaid);
       setAttributes(JSON.stringify(example.attributes, null, 2));
@@ -194,9 +269,6 @@ export default function CredentialIssuer() {
         return;
       }
 
-      const credentialServerUrl =
-        process.env.NEXT_PUBLIC_CREDENTIAL_SERVER_URL ||
-        "https://cred-issuance.dev.idw-sandboxes.cf-deployments.org";
 
       // Issue credential via credential server
       // API expects: { schemaSaid, aid, attribute }
@@ -259,20 +331,38 @@ export default function CredentialIssuer() {
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="load-example">Load Example</Label>
-            <Select onValueChange={loadExample} defaultValue="">
+            <Select
+              onValueChange={loadExample}
+              defaultValue=""
+              disabled={isLoadingExamples}
+            >
               <SelectTrigger id="load-example" className="w-full">
-                <SelectValue placeholder="Select an example..." />
+                <SelectValue
+                  placeholder={
+                    isLoadingExamples
+                      ? "Loading examples..."
+                      : "Select an example..."
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {EXAMPLE_CREDENTIALS.map((example) => (
-                  <SelectItem key={example.name} value={example.name}>
-                    {example.name}
+                {exampleCredentials.length === 0 && !isLoadingExamples ? (
+                  <SelectItem value="" disabled>
+                    No examples available
                   </SelectItem>
-                ))}
+                ) : (
+                  exampleCredentials.map((example) => (
+                    <SelectItem key={example.name} value={example.name}>
+                      {example.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Select an example to pre-fill the credential type and attributes
+              {isLoadingExamples
+                ? "Loading examples from credential server..."
+                : "Select an example to pre-fill the credential type and attributes"}
             </p>
           </div>
 
